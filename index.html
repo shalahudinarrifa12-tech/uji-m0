@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uji Kelayakan M0</title>
+<style>
+  :root { --bg:#f7f8fb; --card:#fff; --ink:#1b2430; --quiet:#5b6675; --line:#dfe3ea; --accent:#1d4e9e; --ok:#1a7f4b; --bad:#c0392b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12161c; --card:#1a2028; --ink:#e8ecf1; --quiet:#97a1af; --line:#2b3440; --accent:#6aa0f0; --ok:#4cc38a; --bad:#ff7b6b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 680px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  p.sub { color: var(--quiet); margin: 0 0 20px; font-size: .95rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-weight:600; margin-bottom:6px; font-size:.92rem; }
+  input { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:transparent; color:inherit; font-size:.95rem; }
+  button { margin-top:12px; padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-weight:600; font-size:.95rem; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:wait; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .ok { color:var(--ok); font-weight:700; }
+  .bad { color:var(--bad); font-weight:700; }
+  .ms { color:var(--quiet); white-space:nowrap; }
+  pre { white-space:pre-wrap; word-break:break-word; font-size:.82rem; color:var(--quiet); margin:0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Uji kelayakan M0</h1>
+  <p class="sub">Memastikan halaman ini bisa memanggil Apps Script, login, sesi, dan tulis/baca Spreadsheet.</p>
+
+  <div class="card">
+    <label for="url">Alamat web app Apps Script (berakhiran /exec)</label>
+    <input id="url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+    <button id="jalan">Jalankan semua uji</button>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr><th>Uji</th><th>Hasil</th><th>Waktu</th></tr></thead>
+      <tbody id="hasil"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <label>Ringkasan untuk dikirim ke Claude</label>
+    <pre id="ringkas">Belum dijalankan.</pre>
+  </div>
+</main>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var tbody = $('hasil');
+  var rows = [];
+  var token = null;
+
+  try { $('url').value = localStorage.getItem('m0url') || ''; } catch (e) {}
+
+  function panggil(url, aksi, data) {
+    var t0 = performance.now();
+    // Dikirim sebagai teks biasa agar tidak memicu preflight CORS.
+    return fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ aksi: aksi, token: token, data: data || {} })
+    }).then(function (r) {
+      return r.text().then(function (txt) {
+        var ms = Math.round(performance.now() - t0);
+        var j;
+        try { j = JSON.parse(txt); } catch (e) { throw new Error('Balasan bukan JSON (kemungkinan halaman login Google atau akses ditolak)'); }
+        return { j: j, ms: ms };
+      });
+    });
+  }
+
+  function tambah(nama, lulus, catatan, ms) {
+    rows.push({ nama: nama, lulus: lulus, catatan: catatan, ms: ms });
+    var tr = document.createElement('tr');
+    var a = document.createElement('td'); a.textContent = nama;
+    var b = document.createElement('td');
+    var s = document.createElement('span'); s.className = lulus ? 'ok' : 'bad'; s.textContent = lulus ? 'LULUS' : 'GAGAL';
+    b.appendChild(s);
+    if (catatan) { b.appendChild(document.createElement('br')); b.appendChild(document.createTextNode(catatan)); }
+    var c = document.createElement('td'); c.className = 'ms'; c.textContent = ms != null ? ms + ' ms' : '';
+    tr.appendChild(a); tr.appendChild(b); tr.appendChild(c);
+    tbody.appendChild(tr);
+  }
+
+  async function uji(nama, fn) {
+    try {
+      var r = await fn();
+      tambah(nama, r.lulus, r.catatan, r.ms);
+      return r.lulus;
+    } catch (e) {
+      tambah(nama, false, String(e.message || e), null);
+      return false;
+    }
+  }
+
+  function ringkasan() {
+    var lulus = rows.filter(function (r) { return r.lulus; }).length;
+    var t = 'Halaman: ' + location.origin + '\n';
+    t += 'Lulus ' + lulus + ' dari ' + rows.length + ' uji\n';
+    rows.forEach(function (r) {
+      t += (r.lulus ? '[LULUS] ' : '[GAGAL] ') + r.nama + (r.ms != null ? ' (' + r.ms + ' ms)' : '') + (r.catatan ? ' - ' + r.catatan : '') + '\n';
+    });
+    $('ringkas').textContent = t;
+  }
+
+  $('jalan').addEventListener('click', async function () {
+    var url = $('url').value.trim();
+    if (!url) { alert('Isi alamat web app dulu.'); return; }
+    try { localStorage.setItem('m0url', url); } catch (e) {}
+    $('jalan').disabled = true;
+    tbody.innerHTML = '';
+    rows = [];
+    token = null;
+
+    await uji('1. Panggilan dari halaman ini ke Apps Script (ping)', async function () {
+      var r = await panggil(url, 'ping', { teks: 'halo' });
+      return { lulus: r.j.ok === true && r.j.data.echo === 'halo', catatan: 'Server mencatat ' + r.j.msServer + ' ms', ms: r.ms };
+    });
+
+    await uji('2. Login dengan password salah ditolak', async function () {
+      var r = await panggil(url, 'login', { username: 'uji01', password: 'salah' });
+      return { lulus: r.j.ok === false, catatan: '', ms: r.ms };
+    });
+
+    await uji('3. Login dengan password benar', async function () {
+      var r = await panggil(url, 'login', { username: 'uji01', password: 'rahasia123' });
+      if (r.j.ok) token = r.j.data.token;
+      return { lulus: r.j.ok === true && !!token, catatan: 'Hash password dihitung di server', ms: r.ms };
+    });
+
+    await uji('4. Token sesi dikenali pada permintaan berikutnya', async function () {
+      var r = await panggil(url, 'cekSesi');
+      return { lulus: r.j.ok === true, catatan: r.j.ok ? 'Pengguna: ' + r.j.data.username : (r.j.galat || ''), ms: r.ms };
+    });
+
+    await uji('5. Tulis satu baris ke Spreadsheet', async function () {
+      var r = await panggil(url, 'tulis', { teks: 'uji ' + new Date().toISOString() });
+      return { lulus: r.j.ok === true, catatan: r.j.ok ? '' : (r.j.galat || ''), ms: r.ms };
+    });
+
+    await uji('6. Baca baris terakhir dari Spreadsheet', async function () {
+      var r = await panggil(url, 'baca');
+      return { lulus: r.j.ok === true && r.j.data.baris.length > 0, catatan: r.j.ok ? r.j.data.baris.length + ' baris terbaca' : (r.j.galat || ''), ms: r.ms };
+    });
+
+    await uji('7. Tanpa token ditolak', async function () {
+      var simpan = token; token = null;
+      var r = await panggil(url, 'baca');
+      token = simpan;
+      return { lulus: r.j.ok === false, catatan: '', ms: r.ms };
+    });
+
+    await uji('8. Lima panggilan ping bersamaan', async function () {
+      var t0 = performance.now();
+      var hasil = await Promise.all([1, 2, 3, 4, 5].map(function (i) { return panggil(url, 'ping', { teks: 'p' + i }); }));
+      var semua = hasil.every(function (x) { return x.j.ok === true; });
+      return { lulus: semua, catatan: 'Terlama ' + Math.max.apply(null, hasil.map(function (x) { return x.ms; })) + ' ms', ms: Math.round(performance.now() - t0) };
+    });
+
+    ringkasan();
+    $('jalan').disabled = false;
+  });
+})();
+</script>
+</body>
+</html>
